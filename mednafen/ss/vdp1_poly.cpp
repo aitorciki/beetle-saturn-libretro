@@ -180,10 +180,10 @@ static INLINE int32 CMD_PolygonG_gouraud_false(const uint16* cmd_data)
 
 int32 CMD_Polygon(const uint16* cmd_data)
 {
-   if(cmd_data[0x2] & 0x4) // gouraud
-      return CMD_PolygonG_gouraud_true(cmd_data);
-   return CMD_PolygonG_gouraud_false(cmd_data);
+ if(cmd_data[0x2] & 0x4) // gouraud
+  return CMD_PolygonG_gouraud_true(cmd_data);
+ else
+  return CMD_PolygonG_gouraud_false(cmd_data);
 }
-
 
 }

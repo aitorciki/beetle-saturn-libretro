@@ -108,8 +108,6 @@ static void SubWrite(StateMem *st, const SFORMAT *sf)
 {
    while(sf->size || sf->name)	// Size can sometimes be zero, so also check for the text name.  These two should both be zero only at the end of a struct.
    {
-      char nameo[1 + 255];
-
       if(!sf->size || !sf->data)
       {
          sf++;
@@ -128,6 +126,7 @@ static void SubWrite(StateMem *st, const SFORMAT *sf)
       uintptr_t p            = (uintptr_t)sf->data;
       uint32 repcount        = sf->repcount;
       const size_t repstride = sf->repstride;
+      char nameo[1 + 255];
       const int slen         = strlen(sf->name);
 
       memcpy(&nameo[1], sf->name, slen);
@@ -363,7 +362,7 @@ static int MDFNSS_StateAction_internal( void *st_p, int load, int data_only, SSD
 	return(1);
 }
 
-int MDFNSS_StateAction(void *st_p, int load, int data_only, SFORMAT *sf, const char *name, bool optional)
+int MDFNSS_StateAction(void *st_p, int load, int data_only, SFORMAT *sf, const char *name, bool optional) noexcept
 {
    SSDescriptor love;
    StateMem *st = (StateMem*)st_p;

@@ -59,7 +59,7 @@ static MDFN_COLD void StateAction(StateMem* sm, const unsigned load, const bool 
   SFEND
  };
 
- MDFNSS_StateAction(sm, load, data_only, StateRegs, "CART_CS1RAM", false);
+ MDFNSS_StateAction(sm, load, data_only, StateRegs, "CART_CS1RAM");
 }
 
 void CART_CS1RAM_Init(CartInfo* c)
@@ -67,7 +67,7 @@ void CART_CS1RAM_Init(CartInfo* c)
  CS1RAM = new uint16[0x1000000 / sizeof(uint16)];
 
  SS_SetPhysMemMap   (0x04000000, 0x04FFFFFF, CS1RAM, 0x1000000, true);
- c->CS01_SetRW8W16(0x04000000, 0x04FFFFFF, 
+ c->CS01_SetRW8W16(0x04000000, 0x04FFFFFF,
 	CS1RAM_RW_DB<uint16, false>,
 	CS1RAM_RW_DB<uint8, true>,
 	CS1RAM_RW_DB<uint16, true>);

@@ -302,7 +302,7 @@ void SMPC_SetInput(unsigned port, const char* type, uint8* ptr)
 {
  assert(port < 13);
 
- if(port == 12) 
+ if(port == 12)
  {
   MiscInputPtr = ptr;
   return;
@@ -357,6 +357,8 @@ void SMPC_SaveNV(Stream* s)
 
 void SMPC_SetRTC(const struct tm* ht, const uint8 lang)
 {
+ RTC.ClockAccum = 0;
+
  if(!ht)
  {
   RTC.Valid = false;
@@ -395,7 +397,9 @@ void SMPC_Init(const uint8 area_code_arg, const int32 master_clock_arg)
 {
  AreaCode = area_code_arg;
  MasterClock = master_clock_arg;
+ SMPC_ClockRatio = 0;
 
+ ResetButtonPhysStatus = false;
  ResetPending = false;
  vb = false;
  vsync = false;
@@ -466,6 +470,7 @@ void SMPC_Reset(bool powering_up)
  memset(OREG, 0, sizeof(OREG));
  PendingCommand = -1;
  ExecutingCommand = -1;
+ SR = 0x00;
  SF = 0;
 
  BusBuffer = 0x00;
@@ -582,7 +587,7 @@ void SMPC_StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFEND
  };
 
- MDFNSS_StateAction(sm, load, data_only, StateRegs, "SMPC", false);
+ MDFNSS_StateAction(sm, load, data_only, StateRegs, "SMPC");
 
  for(unsigned port = 0; port < 2; port++)
  {
@@ -660,14 +665,15 @@ void SMPC_UpdateOutput(void)
 
 void SMPC_UpdateInput(const int32 time_elapsed)
 {
-   if (MiscInputPtr)
-      ResetButtonPhysStatus = (bool)(*MiscInputPtr & 0x1);
+ // keep the condition checks!
+ if (MiscInputPtr)
+  ResetButtonPhysStatus = (bool)(*MiscInputPtr & 0x1);
 
-   for(unsigned vp = 0; vp < 12; vp++)
-   {
-      if (VirtualPorts[vp])
-         VirtualPorts[vp]->UpdateInput(VirtualPortsDPtr[vp], time_elapsed);
-   }
+ for(unsigned vp = 0; vp < 12; vp++)
+ {
+  if (VirtualPorts[vp])
+   VirtualPorts[vp]->UpdateInput(VirtualPortsDPtr[vp], time_elapsed);
+ }
 }
 
 
@@ -767,19 +773,19 @@ uint8 SMPC_Read(const sscpu_timestamp_t timestamp, uint8 A)
   default:
 	break;
 
-    case 0x10: case 0x11: case 0x12: case 0x13: case 0x14: case 0x15: case 0x16: case 0x17:
+  case 0x10: case 0x11: case 0x12: case 0x13: case 0x14: case 0x15: case 0x16: case 0x17:
   case 0x18: case 0x19: case 0x1A: case 0x1B: case 0x1C: case 0x1D: case 0x1E: case 0x1F:
   case 0x20: case 0x21: case 0x22: case 0x23: case 0x24: case 0x25: case 0x26: case 0x27:
   case 0x28: case 0x29: case 0x2A: case 0x2B: case 0x2C: case 0x2D: case 0x2E: case 0x2F:
 
-	ret = (OREG - 0x10)[A];
+	ret = OREG[(size_t)A - 0x10];
 	break;
 
   case 0x30:
 
 	ret = SR;
 	break;
- 
+
   case 0x31:
 	ret &= ~0x01;
 	ret |= SF;
@@ -883,8 +889,8 @@ static void RTC_IncTime(void)
     else
      RTC.wday_mon += 0x10;
 
-    //					
-    static const uint8 mdtab[0x10] = { 
+    //
+    static const uint8 mdtab[0x10] = {
     //         Jan,  Feb,  Mar,  Apr,   May, June, July,  Aug, Sept, Oct,  Nov,  Dec
 	0x10, 0x31, 0x28, 0x31, 0x30, 0x31, 0x30, 0x31, 0x31, 0x30, 0x31, 0x30, 0x31, 0xC1, 0xF5, 0xFF
     };
@@ -976,7 +982,7 @@ sscpu_timestamp_t SMPC_Update(sscpu_timestamp_t timestamp)
      if(ResetButtonCount >= 0)
      {
       ResetButtonCount++;
- 
+
       if(ResetButtonCount >= 3)
       {
        ResetButtonCount = 3;
@@ -996,7 +1002,7 @@ sscpu_timestamp_t SMPC_Update(sscpu_timestamp_t timestamp)
 
     //
     // Do RTC increment here
-    // 
+    //
     while(MDFN_UNLIKELY(RTC.ClockAccum >= (4000000ULL << 32)))
     {
      RTC_IncTime();
@@ -1059,7 +1065,7 @@ sscpu_timestamp_t SMPC_Update(sscpu_timestamp_t timestamp)
 
      if(SlaveSH2On)
       SlaveOff();
- 
+
      if(SoundCPUOn)
       TurnSoundCPUOff();
 
@@ -1101,9 +1107,9 @@ sscpu_timestamp_t SMPC_Update(sscpu_timestamp_t timestamp)
 
       OREG[0x8] = 0; // TODO FIXME: Cartridge code?
       OREG[0x9] = AreaCode;
-      OREG[0xA] = 0x24 | 
+      OREG[0xA] = 0x24 |
 		 ((CurrentClockDivisor == CLOCK_DIVISOR_28M) << 6) |
-		 (SlaveSH2On << 4) | 
+		 (SlaveSH2On << 4) |
 		 (true << 3) | 	// TODO?: Master NMI
 		 (true << 1) |	// TODO?: sysres
 		 (SoundCPUOn << 0);	// sndres

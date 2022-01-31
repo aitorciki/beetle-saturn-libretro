@@ -46,14 +46,14 @@ struct CartInfo
  {
   void (*Read16)(uint32 A, uint16* DB);
   void (*Write8)(uint32 A, uint16* DB);
-  void (*Write16)(uint32 A, uint16* DB);  
+  void (*Write16)(uint32 A, uint16* DB);
  } CS01_RW[0x30];
 
  struct
  {
   void (*Read16)(uint32 A, uint16* DB);
   void (*Write8)(uint32 A, uint16* DB);
-  void (*Write16)(uint32 A, uint16* DB);  
+  void (*Write16)(uint32 A, uint16* DB);
  } CS2M_RW[0x20];
 
  void CS01_SetRW8W16(uint32 Astart, uint32 Aend, void (*r16)(uint32 A, uint16* DB), void (*w8)(uint32 A, uint16* DB) = nullptr, void (*w16)(uint32 A, uint16* DB) = nullptr);
@@ -70,22 +70,24 @@ static INLINE void CART_CS2_Write16_DB(uint32 A, uint16* DB) { extern CartInfo C
 
 enum
 {
- CART__RESERVED = -1,
- CART_NONE = 0,
- CART_BACKUP_MEM,
- CART_EXTRAM_1M,
- CART_EXTRAM_4M,
+ CART__RESERVED  = -1,
+ CART_NONE	 = 0x000,
 
- CART_KOF95,
- CART_ULTRAMAN,
+ CART_BACKUP_MEM = 0x100,
 
- CART_AR4MP,
+ CART_EXTRAM_1M	 = 0x200,
+ CART_EXTRAM_4M	 = 0x201,
 
- CART_CS1RAM_16M,
+ CART_KOF95	 = 0x300,
+ CART_ULTRAMAN	 = 0x301,
 
- CART_NLMODEM,
+ CART_AR4MP	 = 0x400,
 
- CART_MDFN_DEBUG
+ CART_CS1RAM_16M = 0x500,
+
+ CART_NLMODEM	 = 0x600,
+
+ CART_MDFN_DEBUG = 0xF00
 };
 
 void CART_Init(const int cart_type) MDFN_COLD;

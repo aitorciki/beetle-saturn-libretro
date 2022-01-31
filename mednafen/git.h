@@ -531,7 +531,7 @@ typedef struct
  // For absolute coordinates(IDIT_X_AXIS and IDIT_Y_AXIS), usually mapped to a mouse(hence the naming).
  //
  float mouse_scale_x, mouse_scale_y;
- float mouse_offs_x, mouse_offs_y; 
+ float mouse_offs_x, mouse_offs_y;
 } MDFNGI;
 
 //===========================================

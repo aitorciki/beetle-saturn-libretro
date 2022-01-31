@@ -826,7 +826,7 @@ static INLINE void RegsWrite(uint32 A, uint16 V)
 	SpriteCCCond = (V >> 12) & 0x3;
 	SpriteCCNum = (V >> 8) & 0x7;
 	SPCTL_Low = V & 0x3F;
-	break;	
+	break;
 
   case 0xE2:
 	SDCTL = V & 0x13F;
@@ -1981,7 +1981,7 @@ static void T_DrawRBG(const bool rn, uint64* bgbuf, const unsigned w, const uint
    rot_tp = ((int32)coeff < 0);
 
    const uint32 sext = sign_x_to_s32(24, coeff);
- 
+
    switch((KTCTL[ab] >> 2) & 0x3)
    {
     case 0: kx = ky = sext; break;
@@ -2743,7 +2743,7 @@ static NO_INLINE void DrawLine(const uint16 out_line, const uint16 vdp2_line, co
 
      CurYScrollIF[n] += (YScrollI[n] << 8) + YScrollF[n];
     }
- 
+
     if(sc & 0x8) // X zoom
     {
      CurXCoordInc[n] = (VRAM[CurLSA[n] & 0x3FFFF] & 0x7) << 8;
@@ -3219,14 +3219,17 @@ void VDP2REND_Init(const bool IsPAL)
  VisibleLines = PAL ? 288 : 240;
  //
  UserLayerEnableMask = ~0U;
-
+ Clock28M = false;
  //
  WQ_ReadPos = 0;
  WQ_WritePos = 0;
- WQ_InCount.store(0, std::memory_order_release); 
+ WQ_InCount.store(0, std::memory_order_release);
  DrawCounter.store(0, std::memory_order_release);
  WakeupSem = ssem_new(0);
  RThread = sthread_create(RThreadEntry, NULL);
+ #ifdef MDFN_SS_VDP2_THREAD_AFFINITY
+ MThreading::SetAffinity(RThread, MDFN_SS_VDP2_THREAD_AFFINITY);
+ #endif
 }
 
 // Needed for ss.correct_aspect == 0
@@ -3480,7 +3483,7 @@ void VDP2REND_StateAction(StateMem* sm, const unsigned load, const bool data_onl
   }
  }
 
- MDFNSS_StateAction(sm, load, data_only, StateRegs, "VDP2REND", false);
+ MDFNSS_StateAction(sm, load, data_only, StateRegs, "VDP2REND");
 
  if(load)
  {

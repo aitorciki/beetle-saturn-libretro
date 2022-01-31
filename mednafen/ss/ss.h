@@ -2,7 +2,7 @@
 /* Mednafen Sega Saturn Emulation Module                                      */
 /******************************************************************************/
 /* ss.h:
-**  Copyright (C) 2015-2016 Mednafen Team
+**  Copyright (C) 2015-2019 Mednafen Team
 **
 ** This program is free software; you can redistribute it and/or
 ** modify it under the terms of the GNU General Public License
@@ -26,18 +26,6 @@
 #include "../math_ops.h"
 #include <stdint.h>
 #include <stdarg.h>
-
-#if 1
- enum
- {
-  HORRIBLEHACK_NOSH2DMALINE106	 = (1U << 0),
-  HORRIBLEHACK_NOSH2DMAPENALTY   = (1U << 1),
-  HORRIBLEHACK_VDP1VRAM5000FIX	 = (1U << 2),
-  HORRIBLEHACK_VDP1RWDRAWSLOWDOWN= (1U << 3),
-  HORRIBLEHACK_VDP1INSTANT	     = (1U << 4),
- };
- extern uint32 ss_horrible_hacks;
-#endif
 
  enum
  {
@@ -75,6 +63,18 @@
   SS_DBG_SCSP_REGW = (1U << 29),
  };
  enum { ss_dbg_mask = 0 };
+
+#if 1
+ enum
+ {
+  HORRIBLEHACK_NOSH2DMALINE106	 = (1U << 0),
+  HORRIBLEHACK_NOSH2DMAPENALTY   = (1U << 1),
+  HORRIBLEHACK_VDP1VRAM5000FIX	 = (1U << 2),
+  HORRIBLEHACK_VDP1RWDRAWSLOWDOWN= (1U << 3),
+  HORRIBLEHACK_VDP1INSTANT	 = (1U << 4),
+ };
+ extern uint32 ss_horrible_hacks;
+#endif
 
 #define SS_DBG(which, format, ...)
 #define SS_DBGTI SS_DBG
@@ -122,7 +122,7 @@
   SS_EVENT__COUNT,
  };
 
-typedef sscpu_timestamp_t (*ss_event_handler)(const sscpu_timestamp_t timestamp);
+ typedef sscpu_timestamp_t (*ss_event_handler)(const sscpu_timestamp_t timestamp);
 
  struct event_list_entry
  {
@@ -141,7 +141,7 @@ typedef sscpu_timestamp_t (*ss_event_handler)(const sscpu_timestamp_t timestamp)
  // (length is in units of bytes, not 16-bit units)
  //
  // is_writeable is mostly for cheat stuff.
- void SS_SetPhysMemMap(uint32 Astart, uint32 Aend, uint16* ptr, uint32 length, bool is_writeable);
+ void SS_SetPhysMemMap(uint32 Astart, uint32 Aend, uint16* ptr, uint32 length, bool is_writeable = false);
 
  void SS_Reset(bool powering_up) MDFN_COLD;
 

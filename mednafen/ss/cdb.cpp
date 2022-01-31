@@ -693,7 +693,7 @@ enum : int { FLSPhaseBias = __COUNTER__ + 1 };
 	   Partition_UnlinkBuffer(FLS.pnum, bfi);			\
 	   memcpy(FLS.pbuf, &dptr[(dptr[15] == 0x2) ? 24 : 16], 2048);	\
 	   Buffer_Free(bfi);						\
-	  }								
+	  }
 
 #define FLS_READ(buffer, count)						\
 	for(FLS.pbuf_read_i = 0; FLS.pbuf_read_i < (count); FLS.pbuf_read_i++)	\
@@ -794,7 +794,7 @@ static bool FLS_Run(void)
     FLS_READ(&FLS.record[0], 1);
     if(!FLS.record[0])
      continue;
-    FLS_READ(&FLS.record[1], FLS.record[0] - 1);
+    FLS_READ(&FLS.record[1], (unsigned)(FLS.record[0] - 1));
 
     if(FLS.finfo_offs < 256)
     {
@@ -1053,10 +1053,97 @@ static INLINE void RecalcIRQOut(void)
 
 void CDB_Reset(bool powering_up)
 {
+ if(powering_up)
+ {
+  //
+  //
+  //
+  GetSecLen = 0;
+  PutSecLen = 0;
+
+  AuthDiscType = 0;
+
+  HIRQ = 0;
+  HIRQ_Mask = 0;
+  memset(CData, 0x00, sizeof(CData));
+  memset(Results, 0x00, sizeof(Results));
+  CommandPending = false;
+  SWResetHIRQDeferred = 0;
+  SWResetPending = false;
+
+  CDDevConn = 0;
+  LastBufDest = 0;
+
+  memset(Buffers, 0x00, sizeof(Buffers));
+  memset(Filters, 0x00, sizeof(Filters));
+  memset(Partitions, 0x00, sizeof(Partitions));
+  FirstFreeBuf = 0;
+  FreeBufferCount = 0;
+  memset(&FADSearch, 0x00, sizeof(FADSearch));
+
+  CalcedActualSize = 0;
+  //static bool TrayOpen;
+  //static CDInterface* Cur_CDIF;
+  //static CDUtility::TOC toc;
+  //static sscpu_timestamp_t lastts;
+  CommandPhase = 0;
+  CommandClockCounter = 0;
+  //static uint32 CDB_ClockRatio;
+
+  memset(&CTR, 0x00, sizeof(CTR));
+  memset(&DT, 0x00, sizeof(DT));
+
+  StandbyTime = 0;
+  ECCEnable = 0;
+  RetryCount = 0;
+  ResultsRead = 0;
+  SeekIndexPhase = 0;
+  CurSector = 0;
+  DrivePhase = 0;
+  DriveCounter = 0;
+  PeriodicIdleCounter = 0;
+
+  PlayRepeatCounter = 0;
+  CurPlayRepeat = 0;
+
+  CurPlayStart = 0;
+  CurPlayEnd = 0;
+  PlayEndIRQType = 0;
+
+  PlayCmdStartPos = 0;
+  PlayCmdEndPos = 0;
+  PlayCmdRepCnt = 0;
+
+  memset(CDDABuf, 0x00, sizeof(CDDABuf));
+  CDDABuf_RP = 0;
+  CDDABuf_WP = 0;
+  CDDABuf_Count = 0;
+
+  memset(SecPreBuf, 0x00, sizeof(SecPreBuf));
+  SecPreBuf_In = 0;
+  memset(TOC_Buffer, 0x00, sizeof(TOC_Buffer));
+
+  memset(&CurPosInfo, 0x00, sizeof(CurPosInfo));
+  memset(SubCodeQBuf, 0x00, sizeof(SubCodeQBuf));
+  memset(SubCodeRWBuf, 0x00, sizeof(SubCodeRWBuf));
+  memset(SubQBuf, 0x00, sizeof(SubQBuf));
+  memset(SubQBuf_Safe, 0x00, sizeof(SubQBuf_Safe));
+  SubQBuf_Safe_Valid = false;
+
+  memset(FileInfo, 0x00, sizeof(FileInfo));
+  FileInfoValid = false;
+  memset(&RootDirInfo, 0x00, sizeof(RootDirInfo));
+  RootDirInfoValid = false;
+
+  memset(&FLS, 0x00, sizeof(FLS));
+ }
+ //
+ //
  HIRQ = 0;
  HIRQ_Mask = 0;
  RecalcIRQOut();
-
+ //
+ //
  CDB_ResetCD();
 }
 
@@ -1340,7 +1427,7 @@ static void StartSeek(const uint32 cmd_target, const bool no_pickup_change = fal
 
    if(fad_target < (150 + (int32)toc.tracks[track].lba))
     break;
-    
+
    tt = track;
   }
 
@@ -1430,7 +1517,7 @@ static void Drive_Run(int64 clocks)
 	}
 	else
 	 DriveCounter = (int64)1000 << 32;
-	
+
 	break;
 
     case DRIVEPHASE_STARTUP:
@@ -1614,7 +1701,7 @@ static void Drive_Run(int64 clocks)
           // CurPosInfo.fad = SECTOR HEADER
           //else
 	  // CurPosInfo.fad = SUBQ STUFF
-	  CurPosInfo.fad = CurSector;	
+	  CurPosInfo.fad = CurSector;
 	  if(DecodeSubQ(SecPreBuf + 2352))
 	  {
 	   CurPosInfo.rel_fad = (BCD_to_U8(SubQBuf[0x3]) * 60 + BCD_to_U8(SubQBuf[0x4])) * 75 + BCD_to_U8(SubQBuf[0x5]);
@@ -1633,7 +1720,7 @@ static void Drive_Run(int64 clocks)
   if(PeriodicIdleCounter <= 0)
   {
    PeriodicIdleCounter = PeriodicIdleCounter_Reload;
- 
+
    //
    //
    //
@@ -1664,7 +1751,7 @@ static void Drive_Run(int64 clocks)
     else
     {
      const unsigned start_track = std::min<unsigned>(toc.last_track, std::max<unsigned>(toc.first_track, (CurPlayStart >> 8) & 0xFF));
-     const unsigned start_index = std::min<unsigned>(99, std::max<unsigned>(1, CurPlayStart & 0xFF));
+     //const unsigned start_index = std::min<unsigned>(99, std::max<unsigned>(1, CurPlayStart & 0xFF));
 
      end_met |= (CurPosInfo.tno < start_track); //|| (CurPosInfo.tno == start_track && CurPosInfo.idx < start_index);
     }
@@ -1850,7 +1937,7 @@ sscpu_timestamp_t CDB_Update(sscpu_timestamp_t timestamp)
       DT.FIFO_In = 0;
 
       DT.BufList[0] = 0xFF;
-     
+
       DT.Writing = false;
       DT.NeedBufFree = false;
       DT.Active = true;
@@ -2142,12 +2229,12 @@ sscpu_timestamp_t CDB_Update(sscpu_timestamp_t timestamp)
        DT.BufCount = 1;
 
        DT.InBufOffs = 0;
-       
+
        DT.TotalCounter = 0;
        DT.FIFO_RP = 0;
        DT.FIFO_WP = 0;
        DT.FIFO_In = 0;
-     
+
        DT.Writing = false;
        DT.NeedBufFree = false;
        DT.Active = true;
@@ -2207,7 +2294,7 @@ sscpu_timestamp_t CDB_Update(sscpu_timestamp_t timestamp)
        Filter_SetFalseConn(fnum, 0xFF);
        Filter_SetRange(fnum, 0, 0);
        Filters[fnum].Mode = 0;
-      
+
        FLS.pnum = fnum;
        FLS.DoAuth = true;
        FLS.Active = true;
@@ -2467,7 +2554,7 @@ sscpu_timestamp_t CDB_Update(sscpu_timestamp_t timestamp)
        //
        //
        CMD_EAT_CLOCKS(150);
-       TriggerIRQ(HIRQ_ESEL);      
+       TriggerIRQ(HIRQ_ESEL);
       }
      }
      else
@@ -2923,7 +3010,7 @@ sscpu_timestamp_t CDB_Update(sscpu_timestamp_t timestamp)
         else
 	{
 	 int abfi = Buffer_Allocate(false);
-	
+
 	 memcpy(Buffers[abfi].Data, bufdata, sizeof(Buffers[abfi].Data));
 
          FilterBuf(dst_fnum, abfi);
@@ -3021,7 +3108,7 @@ sscpu_timestamp_t CDB_Update(sscpu_timestamp_t timestamp)
       Filters[fnum].SubModeMask = 0;
       Filters[fnum].CInfo = 0;
       Filters[fnum].CInfoMask = 0;
-      
+
       FLS.pnum = fnum;
       FLS.total_max = fi->size();
       FLS.FileInfoOffs = 2;
@@ -3068,7 +3155,7 @@ sscpu_timestamp_t CDB_Update(sscpu_timestamp_t timestamp)
       Filter_SetFalseConn(fnum, 0xFF);
       Filter_SetRange(fnum, fi->fad(), (fi->size() + 2047) >> 11);
       Filters[fnum].Mode = FilterS::MODE_SEL_FADR;
-      
+
       FLS.pnum = fnum;
       FLS.total_max = fi->size();
       FLS.FileInfoOffs = start_fileid;
@@ -3095,10 +3182,10 @@ sscpu_timestamp_t CDB_Update(sscpu_timestamp_t timestamp)
       CDStatusResults(true);
      else
      {
-      // FIXME: Not sure about the [0].fad == [1].fad root dir thing...  Might instead be 0x01 to note that the number of files in the directory 
+      // FIXME: Not sure about the [0].fad == [1].fad root dir thing...  Might instead be 0x01 to note that the number of files in the directory
       // can be held without using Read Directory?
       BasicResults((MakeBaseStatus() << 8),
-		FLS.FileInfoValidCount, 
+		FLS.FileInfoValidCount,
 		((FileInfo[0].fad() == FileInfo[1].fad()) << 8) | (FLS.FileInfoOffs >> 16),
 		FLS.FileInfoOffs);
      }
@@ -3146,7 +3233,7 @@ sscpu_timestamp_t CDB_Update(sscpu_timestamp_t timestamp)
         DT.FIFO_In = 0;
 
         DT.BufList[0] = 0xF0;
-      
+
         DT.Writing = false;
         DT.NeedBufFree = false;
         DT.Active = true;
@@ -3655,7 +3742,7 @@ void CDB_StateAction(StateMem* sm, const unsigned load, const bool data_only)
   SFEND
  };
 
- MDFNSS_StateAction(sm, load, data_only, StateRegs, "CDB", false);
+ MDFNSS_StateAction(sm, load, data_only, StateRegs, "CDB");
 
  if(load)
  {

@@ -65,8 +65,8 @@ void MDFN_DispMessage(const char *format, ...)
 }
 
 #define MEDNAFEN_CORE_NAME                   "Beetle Saturn"
-#define MEDNAFEN_CORE_VERSION                "v1.22.2"
-#define MEDNAFEN_CORE_VERSION_NUMERIC        0x00102202
+#define MEDNAFEN_CORE_VERSION                "v1.23.0"
+#define MEDNAFEN_CORE_VERSION_NUMERIC        0x00102300
 #define MEDNAFEN_CORE_EXTENSIONS             "cue|ccd|chd|toc|m3u"
 #define MEDNAFEN_CORE_TIMING_FPS             59.82
 #define MEDNAFEN_CORE_GEOMETRY_BASE_W        320
@@ -127,6 +127,8 @@ MDFNGI *MDFNGameInfo = NULL;
 
 static sscpu_timestamp_t MidSync(const sscpu_timestamp_t timestamp);
 
+uint32 ss_horrible_hacks;
+
 static bool NeedEmuICache;
 static const uint8 BRAM_Init_Data[0x10] = { 0x42, 0x61, 0x63, 0x6b, 0x55, 0x70, 0x52, 0x61, 0x6d, 0x20, 0x46, 0x6f, 0x72, 0x6d, 0x61, 0x74 };
 
@@ -170,6 +172,7 @@ static uint32 SH7095_DB;
 #include "mednafen/ss/scu.inc"
 
 static sha256_digest BIOS_SHA256;   // SHA-256 hash of the currently-loaded BIOS; used for save state sanity checks.
+static int ActiveCartType;
 static std::bitset<1U << (27 - SH7095_EXT_MAP_GRAN_BITS)> FMIsWriteable;
 
 template<typename T>
@@ -803,7 +806,7 @@ static int64 UpdateInputLastBigTS;
 static INLINE void UpdateSMPCInput(const sscpu_timestamp_t timestamp)
 {
  SMPC_TransformInput();
-	
+
  int32 elapsed_time = (((int64)timestamp * cur_clock_div * 1000 * 1000) - UpdateInputLastBigTS) / (EmulatedSS.MasterClock / MDFN_MASTERCLOCK_FIXED(1));
 
  UpdateInputLastBigTS += (int64)elapsed_time * (EmulatedSS.MasterClock / MDFN_MASTERCLOCK_FIXED(1));
@@ -970,8 +973,6 @@ typedef struct
    const char *name;
 } CartName;
 
-uint32 ss_horrible_hacks;
-
 static bool InitCommon(const unsigned cpucache_emumode, const unsigned cart_type, const unsigned smpc_area, const uint32 horrible_hacks )
 {
  //
@@ -1040,6 +1041,8 @@ static bool InitCommon(const unsigned cpucache_emumode, const unsigned cart_type
       CPU[i].Init(cpucache_emumode == CPUCACHE_EMUMODE_DATA_CB);
       CPU[i].SetMD5((bool)i);
    }
+   SH7095_mem_timestamp = 0;
+   SH7095_DB = 0;
 
    ss_horrible_hacks = horrible_hacks;
 
@@ -1059,6 +1062,7 @@ static bool InitCommon(const unsigned cpucache_emumode, const unsigned cart_type
    MDFNMP_RegSearchable(0x06000000, WORKRAM_BANK_SIZE_BYTES);
 
    CART_Init(cart_type);
+   ActiveCartType = cart_type;
 
    //
    //
@@ -1407,24 +1411,35 @@ MDFN_COLD int LibRetro_StateAction( StateMem* sm, const unsigned load, const boo
    if ( data_only == false )
    {
       sha256_digest sr_dig = BIOS_SHA256;
+      int cart_type = ActiveCartType;
 
       SFORMAT SRDStateRegs[] =
       {
          SFPTR8( sr_dig.data(), sr_dig.size() ),
+         SFVAR(cart_type),
          SFEND
       };
 
-      success = MDFNSS_StateAction( sm, load, data_only, SRDStateRegs, "BIOS_HASH", true );
+      success = MDFNSS_StateAction( sm, load, data_only, SRDStateRegs, "BIOS_HASH" );
       if ( success == 0 ) {
          return 0;
       }
 
-      if ( load && sr_dig != BIOS_SHA256 ) {
-         log_cb( RETRO_LOG_WARN, "BIOS hash mismatch(save state created under a different BIOS)!\n" );
-         return 0;
+      if(load)
+      {
+         if(sr_dig != BIOS_SHA256) {
+            log_cb( RETRO_LOG_WARN, "BIOS hash mismatch(save state created under a different BIOS)!\n" );
+            return 0;
+         }
+
+         if(cart_type != ActiveCartType) {
+            log_cb( RETRO_LOG_WARN, "Cart type mismatch(save state created with a different cart)!\n" );
+            return 0;
+         }
       }
    }
 
+ bool RecordedNeedEmuICache = load ? false : NeedEmuICache;
  EventsPacker ep;
  ep.Save();
 
@@ -1444,6 +1459,8 @@ MDFN_COLD int LibRetro_StateAction( StateMem* sm, const unsigned load, const boo
   SFPTR16(WorkRAML, WORKRAM_BANK_SIZE_BYTES / sizeof(uint16_t)),
   SFPTR16(WorkRAMH, WORKRAM_BANK_SIZE_BYTES / sizeof(uint16_t)),
   SFPTR8(BackupRAM, sizeof(BackupRAM) / sizeof(BackupRAM[0])),
+
+  SFVAR(RecordedNeedEmuICache),
 
   SFEND
  };
@@ -1479,6 +1496,12 @@ MDFN_COLD int LibRetro_StateAction( StateMem* sm, const unsigned load, const boo
       {
          log_cb( RETRO_LOG_WARN, "Bad state events data.\n" );
          InitEvents();
+      }
+
+      if(NeedEmuICache && !RecordedNeedEmuICache)
+      {
+         for(size_t i = 0; i < 2; i++)
+            CPU[i].FixupICacheModeState();	// Only call it after all RAM has been loaded from the save state.
       }
    }
 
@@ -1758,7 +1781,7 @@ static void check_variables(bool startup)
       else if (!strcmp(var.value, "disabled"))
          opposite_directions = false;
    }
-   
+
    var.key = "beetle_saturn_midsync";
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
@@ -1934,7 +1957,8 @@ static bool MDFNI_LoadGame( const char *name )
             {
                disc_detect_region( &region );
 
-               DB_Lookup(nullptr, sgid, fd_id, &region, &cart_type, &cpucache_emumode, &horrible_hacks );
+               DB_Lookup(nullptr, sgid, fd_id, &region, &cart_type, &cpucache_emumode );
+               horrible_hacks = DB_LookupHH( sgid, fd_id );
 
                // forced region setting?
                if ( setting_region != 0 ) {
@@ -2025,7 +2049,7 @@ bool retro_load_game(const struct retro_game_info *info)
    //make sure shared memory cards and save states are enabled only at startup
    shared_intmemory = shared_intmemory_toggle;
    shared_backup = shared_backup_toggle;
-   
+
    // Let's try to load the game. If this fails then things are very wrong.
    if (MDFNI_LoadGame(retro_cd_path) == false)
       return false;

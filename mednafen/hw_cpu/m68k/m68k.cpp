@@ -104,7 +104,10 @@ void M68K::StateAction(StateMem* sm, const unsigned load, const bool data_only, 
   SFEND
  };
 
- MDFNSS_StateAction(sm, load, data_only, StateRegs, sname, false);
+ MDFNSS_StateAction(sm, load, data_only, StateRegs, sname);
+
+ if(load)
+  XPending &= XPENDING_MASK__VALID;
 }
 
 void M68K::LoadOldState(const uint8* osm)
@@ -309,7 +312,7 @@ struct M68K::HAM
    case ADDR_REG_INDIR_POST:
    case ADDR_REG_INDIR_PRE:
    	break;
-  
+
    case ADDR_REG_INDIR_DISP:	// (d16, An)
    case ADDR_REG_INDIR_INDX: 	// (d8, An, Xn)
 	ext = zptr->ReadOp();
@@ -356,7 +359,7 @@ struct M68K::HAM
    case ADDR_REG_INDIR_INDX:
 	zptr->timestamp += 2;
 	ea = zptr->A[reg] + (int8)ext + ((ext & 0x800) ? zptr->DA[ext >> 12] : (int16)zptr->DA[ext >> 12]);
-	break;	
+	break;
 
    case ABS_SHORT:
 	ea = (int16)ext;
@@ -395,7 +398,11 @@ struct M68K::HAM
 	break;
 
    case DATA_REG_DIR:
+	#ifdef MSB_FIRST
+	memcpy((uint8*)&zptr->D[reg] + (4 - sizeof(T)), &val, sizeof(T));
+	#else
 	memcpy((uint8*)&zptr->D[reg] + 0, &val, sizeof(T));
+	#endif
 	break;
 
    case ADDR_REG_INDIR:
@@ -657,7 +664,7 @@ void NO_INLINE M68K::Exception(unsigned which, unsigned vecnum)
 
  SetSVisor(true);
  SetTrace(false);
- 
+
  if(which == EXCEPTION_INT)
  {
   unsigned evn;
@@ -893,7 +900,7 @@ INLINE void M68K::CHK(HAM<T, SAM> &src, HAM<T, DAM> &dst)
 {
  uint32 const src_data = src.read();
  uint32 const dst_data = dst.read();
- 
+
  timestamp += 6;
 
  CalcZN<T>(dst_data);
@@ -1787,7 +1794,7 @@ INLINE void M68K::EXG(uint32* a, uint32* b)
 {
  timestamp += 2;
 
- std::swap(*a, *b); 
+ std::swap(*a, *b);
 }
 
 //
@@ -2246,6 +2253,8 @@ void M68K::Reset(bool powering_up)
 {
  if(powering_up)
  {
+  PC = 0;
+
   for(unsigned i = 0; i < 8; i++)
    D[i] = 0;
 
@@ -2256,7 +2265,7 @@ void M68K::Reset(bool powering_up)
 
   SetSR(0);
  }
- XPending = (XPending & ~XPENDING_MASK_STOPPED) | XPENDING_MASK_RESET;
+ XPending = (XPending & ~(XPENDING_MASK_STOPPED | XPENDING_MASK_NMI)) | XPENDING_MASK_RESET;
 }
 
 

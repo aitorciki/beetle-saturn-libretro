@@ -36,6 +36,8 @@
 #include "vdp2_common.h"
 #include "vdp2_render.h"
 
+#include "sh7095.h"
+
 namespace VDP2
 {
 
@@ -365,6 +367,16 @@ static INLINE void IncVCounter(const sscpu_timestamp_t event_timestamp)
   Window[0].YEndMet = Window[1].YEndMet = false;
  }
 
+#if 1
+ if(MDFN_UNLIKELY(ss_horrible_hacks & HORRIBLEHACK_NOSH2DMALINE106))
+ {
+  const bool s = (VCounter == (VTimings[PAL][VRes][VPHASE__COUNT - 1] - 1));
+
+  for(size_t i = 0; i < 2; i++)
+   CPU[i].SetExtHaltDMAKludgeFromVDP2(s);
+ }
+#endif
+
  // - 1, so the CPU loop will  have plenty of time to exit before we reach non-hblank top border area
  // (exit granularity could be large if program is executing from SCSP RAM space, for example).
  if(VCounter == (VTimings[PAL][VRes][VPHASE_TOP_BLANKING] - 1))
@@ -490,7 +502,7 @@ static INLINE int32 AddHCounter(const sscpu_timestamp_t event_timestamp, int32 c
       r.Ysp = ((int64)rp.RotMatrix[3] * ((int32)rp.XstAccum - (rp.Px * 1024)) +
 	      (int64)rp.RotMatrix[4] * ((int32)rp.YstAccum - (rp.Py * 1024)) +
 	      (int64)rp.RotMatrix[5] * (rp.Zst      - (rp.Pz * 1024))) >> 10;
- 
+
       r.Xp = rp.RotMatrix[0] * (rp.Px - rp.Cx) +
 	    rp.RotMatrix[1] * (rp.Py - rp.Cy) +
 	    rp.RotMatrix[2] * (rp.Pz - rp.Cz) +
@@ -841,6 +853,8 @@ void Init(const bool IsPAL)
  SurfInterlaceField = -1;
  PAL = IsPAL;
  lastts = 0;
+ CRTLineCounter = 0x80000000U;
+ Clock28M = false;
 
  SS_SetPhysMemMap(0x05E00000, 0x05EFFFFF, VRAM, 0x80000, true);
 
@@ -869,6 +883,8 @@ void Kill(void)
 //
 void Reset(bool powering_up)
 {
+ memset(RawRegs, 0, sizeof(RawRegs));
+
  DisplayOn = false;
  BorderMode = false;
  ExLatchEnable = false;
@@ -886,6 +902,9 @@ void Reset(bool powering_up)
  VPhase = VPHASE_ACTIVE;
  VCounter = 0;
  Odd = true;
+
+ for(size_t i = 0; i < 2; i++)
+  CPU[i].SetExtHaltDMAKludgeFromVDP2(false);
 
  RAMCTL_Raw = 0;
  CRAM_Mode = 0;
@@ -940,7 +959,7 @@ void Reset(bool powering_up)
 //
 //
 //
-uint32 GetRegister(const unsigned id)
+uint32 GetRegister(const unsigned id, char* const special, const uint32 special_len)
 {
  uint32 ret = 0xDEADBEEF;
 

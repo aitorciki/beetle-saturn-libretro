@@ -32,6 +32,7 @@ class SH7095 final
  void Init(const bool CacheBypassHack) MDFN_COLD;
 
  void StateAction(StateMem* sm, const unsigned load, const bool data_only, const char* sname) MDFN_COLD;
+ void FixupICacheModeState(void) MDFN_COLD;
 
  void ForceInternalEventUpdates(void);
  void AdjustTS(int32 delta, bool force_set = false);
@@ -51,11 +52,17 @@ class SH7095 final
 
   if(ExtHalt)
    SetPEX(PEX_PSEUDO_EXTHALT);	// Only SetPEX() here, ClearPEX() is called in the pseudo exception handling code as necessary.
+
+  ExtHaltDMA = (ExtHaltDMA & ~1) | state;
+ }
+
+ INLINE void SetExtHaltDMAKludgeFromVDP2(bool state)
+ {
+  ExtHaltDMA = (ExtHaltDMA & ~2) | (state << 1);
  }
 
  template<unsigned which, bool EmulateICache, bool DebugMode>
  void Step(void);
-
 
  //private:
  uint32 R[16];
@@ -189,6 +196,8 @@ class SH7095 final
  void (MDFN_FASTCALL *MWFP16[8])(uint32 A, uint16);
  void (MDFN_FASTCALL *MWFP32[8])(uint32 A, uint32);
 
+ sscpu_timestamp_t WB_until[16];
+
  //
  //
  // Cache:
@@ -225,7 +234,7 @@ class SH7095 final
  //
  // Interrupt controller registers and related state
  //
- // 
+ //
  void INTC_Reset(void) MDFN_COLD;
 
  bool NMILevel;
@@ -383,12 +392,11 @@ class SH7095 final
 
  void SCI_Reset(void) MDFN_COLD;
 
- const char* const cpu_name;
-
  //
  //
  //
  bool ExtHalt;
+ uint8 ExtHaltDMA;
 
  uint8 (*const ExIVecFetch)(void);
  uint8 GetPendingInt(uint8*);
@@ -538,11 +546,12 @@ class SH7095 final
   GSREG_RWT,
  };
 
- uint32 GetRegister(const unsigned id);
+ uint32 GetRegister(const unsigned id, char* const special, const uint32 special_len);
  void SetRegister(const unsigned id, const uint32 value) MDFN_COLD;
 
  void CheckRWBreakpoints(void (*MRead)(unsigned len, uint32 addr), void (*MWrite)(unsigned len, uint32 addr)) const;
  private:
+ const char* const cpu_name;
  bool CBH_Setting;
  uint32 PC_IF, PC_ID;	// Debug-related variables.
 };

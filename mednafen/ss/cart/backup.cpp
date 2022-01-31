@@ -73,7 +73,7 @@ static MDFN_COLD void StateAction(StateMem* sm, const unsigned load, const bool 
   SFEND
  };
 
- MDFNSS_StateAction(sm, load, data_only, StateRegs, "CART_BACKUP", false);
+ MDFNSS_StateAction(sm, load, data_only, StateRegs, "CART_BACKUP");
 
  if(load)
  {

@@ -49,7 +49,7 @@ void Kill_LEC_Correct(void)
  */
 
 int CheckEDC(const unsigned char *cd_frame, bool xa_mode)
-{ 
+{
  unsigned int expected_crc, real_crc;
  unsigned int crc_base = xa_mode ? 2072 : 2064;
 
@@ -58,7 +58,7 @@ int CheckEDC(const unsigned char *cd_frame, bool xa_mode)
  expected_crc |= cd_frame[crc_base + 2] << 16;
  expected_crc |= cd_frame[crc_base + 3] << 24;
 
- if(xa_mode) 
+ if(xa_mode)
   real_crc = EDCCrc32(cd_frame+16, 2056);
  else
   real_crc = EDCCrc32(cd_frame, 2064);
@@ -73,7 +73,7 @@ int CheckEDC(const unsigned char *cd_frame, bool xa_mode)
  ***/
 
 int ValidateRawSector(unsigned char *frame, bool xaMode)
-{  
+{
   /* Do simple L-EC.
      It seems that drives stop their internal L-EC as soon as the
      EDC is okay, so we may see uncorrected errors in the parity bytes.
@@ -94,10 +94,13 @@ int ValidateRawSector(unsigned char *frame, bool xaMode)
     memcpy(frame + 12, header, 4);
   }
 
-  /* Test internal sector checksum again */
-  /* EDC failure in RAW sector */
-  if(!CheckEDC(frame, xaMode))
-   return false;
+   /* Test internal sector checksum again */
+   if(!CheckEDC(frame, xaMode))
+   {
+    /* EDC failure in RAW sector */
+    return false;
+   }
+
   return true;
 }
 

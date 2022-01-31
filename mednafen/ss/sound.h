@@ -39,7 +39,7 @@ void SOUND_SetClockRatio(uint32 ratio); // Ratio between SH-2 clock and 68K cloc
 sscpu_timestamp_t SOUND_Update(sscpu_timestamp_t timestamp);
 void SOUND_ResetTS(void);
 int32 SOUND_FlushOutput(void);
-void SOUND_StateAction(StateMem *sm, const unsigned load, const bool data_only);
+void SOUND_StateAction(StateMem* sm, const unsigned load, const bool data_only) MDFN_COLD;
 
 uint16 SOUND_Read16(uint32 A);
 void SOUND_Write8(uint32 A, uint8 V);

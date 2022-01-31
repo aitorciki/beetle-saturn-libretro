@@ -41,7 +41,7 @@
 
 SS_SCSP::SS_SCSP()
 {
- memset(&RAM[0x40000], 0x00, 0x80000);	// Zero out dummy part.
+ memset(&RAM[0x40000], 0x00, 0x40000 * sizeof(uint16));	// Zero out dummy part.
 
  Reset(true);
 }
@@ -89,7 +89,7 @@ void SS_SCSP::RecalcMainInt(void)	// Main CPU interrupts
 void SS_SCSP::Reset(bool powering_up)
 {
  //
- // May need to add a DecodeSlotReg() function or something similar if we implement 
+ // May need to add a DecodeSlotReg() function or something similar if we implement
  // more aggressive slot register value optimizations on writes in the future.
  //
  memset(SlotRegs, 0, sizeof(SlotRegs));
@@ -105,12 +105,15 @@ void SS_SCSP::Reset(bool powering_up)
   Slots[i].LFOTimeCounter = 1;
  }
 
+ for(unsigned i = 0; i < 2; i++)
+  EXTS[i] = 0;
+
  memset(SoundStack, 0, sizeof(SoundStack));
  memset(SoundStackDelayer, 0, sizeof(SoundStackDelayer));
 
  if(powering_up)
  {
-  memset(RAM, 0x00, 0x80000);	// or something else?
+  memset(RAM, 0x00, 0x40000 * sizeof(uint16));	// or something else?
  }
 
  //
@@ -145,6 +148,7 @@ void SS_SCSP::Reset(bool powering_up)
   Timers[i].Control = 0;
   Timers[i].Counter = 0;
   Timers[i].PrevClockIn = false;
+  Timers[i].Reload = -1;
  }
 
  //
@@ -995,7 +999,7 @@ INLINE void SS_SCSP::RunDSP(void)
  // Bit    47: XSEL
  // Bit 48-54: TWA(temp write address) Seems to be an offset added to a counter changed each sample.
  // Bit    55: TWT(temp write trigger)  WARNING: Setting this to 1 for all 128 steps apparently can cause a CPU to freeze up if it tries to read/write TEMP afterward.
- // Bit 56-62: TRA(temp read address) 
+ // Bit 56-62: TRA(temp read address)
  for(unsigned step = 0; step < 128; step++)
  {
   const uint64 instr = DSP.MPROG[step];
@@ -1018,7 +1022,7 @@ INLINE void SS_SCSP::RunDSP(void)
   const bool YRL = (instr >> 19) & 1;
   const bool SHFT0 = (instr >> 20) & 1;
   const bool SHFT1 = (instr >> 21) & 1;
-  const bool FRCL = (instr >> 22) & 1;  
+  const bool FRCL = (instr >> 22) & 1;
   const bool ADRL = (instr >> 23) & 1;
   const unsigned EWA = (instr >> 24) & 0x0F;
   const bool EWT = (instr >> 28) & 1;
@@ -1284,10 +1288,10 @@ INLINE void SS_SCSP::RunSample(int16* outlr)
     {
      if(s->LoopMode == 0)
       s->WFAllowAccess = false;
-    
+
      if(s->LoopMode == 3)
       s->LoopSub = !s->LoopSub;
- 
+
      s->CurrentAddr += s->LoopStart - s->LoopEnd;
     }
    }
@@ -1356,7 +1360,7 @@ INLINE void SS_SCSP::RunSample(int16* outlr)
   // Do LFSR clocking between sample fetching and ALFO fetching.
   LFSR = (LFSR >> 1) | (((LFSR >> 5) ^ LFSR) & 1) << 16;
 
-  
+
   {
    int32 vlevel;
 
@@ -1479,7 +1483,7 @@ void SS_SCSP::StateAction(StateMem* sm, const unsigned load, const bool data_onl
   SFVAR(MIDI.OutputWP),
   SFVAR(MIDI.OutputCount),
   SFVAR(MIDI.Flags),
- 
+
   SFVAR(SCIEB),
   SFVAR(SCIPD),
 
@@ -1534,7 +1538,7 @@ void SS_SCSP::StateAction(StateMem* sm, const unsigned load, const bool data_onl
   SFEND
  };
 
- MDFNSS_StateAction(sm, load, data_only, StateRegs, "SCSP", false);
+ MDFNSS_StateAction(sm, load, data_only, StateRegs, "SCSP");
 
  if(load)
  {
@@ -1560,7 +1564,7 @@ void SS_SCSP::StateAction(StateMem* sm, const unsigned load, const bool data_onl
   RBL &= 0x3;
 
   DSP.RWAddr &= 0x7FFFF;
-  
+
   DSP.MPROG_Dirty = true;
 
   for(uint32 A = 0x100000; A < 0x100400; A += 2)

@@ -23,6 +23,8 @@
    Instruction cache emulation shouldn't be enabled globally for all games until we resolve timestamp vs mem_timestamp issues
    in regards to bus contention and time sharing, or else emulated dual-CPU programs may run slower
    than they should and probably glitch out(and also until 5GHz desktop CPUs are the norm ;)).
+
+   Also...the emulated overhead is a little too high when executing a branch with no delay slot from non-cacheable memory.
 */
 
 /*
@@ -43,7 +45,7 @@
 
 	Address errors occur one instruction too soon.
 
-	SLEEP instruction, standby mode, and DMA burst stalls are handled by thoroughly (ab)using the 
+	SLEEP instruction, standby mode, and DMA burst stalls are handled by thoroughly (ab)using the
 	IF/ID pipeline emulation and opcode dispatch mechanism.
 
 	Individual module clocking disabling functionality of SBYCR isn't handled.
@@ -87,7 +89,7 @@
  #define NE32ASU8_IDX_ADJ(T, idx) ( ((idx) & ~(sizeof(T) - 1)) ^ (4 - (sizeof(T))) )
 #endif
 
-SH7095::SH7095(const char* const name_arg, const unsigned event_id_dma_arg, uint8 (*exivecfn_arg)(void)) : event_id_dma(event_id_dma_arg), cpu_name(name_arg), ExIVecFetch(exivecfn_arg)
+SH7095::SH7095(const char* const name_arg, const unsigned event_id_dma_arg, uint8 (*exivecfn_arg)(void)) : event_id_dma(event_id_dma_arg), ExIVecFetch(exivecfn_arg), cpu_name(name_arg)
 {
  Init(false);
 }
@@ -148,6 +150,7 @@ void SH7095::Init(const bool cbh)
  NMILevel = false;
  BSC.BCR1 &= 0x7FFF; //MD5Level = false;
  ExtHalt = false;
+ ExtHaltDMA = false;
 
  TruePowerOn();
 }
@@ -166,6 +169,9 @@ void SH7095::AdjustTS(int32 delta, bool force_set)
   MA_until = delta;
   MM_until = delta;
 
+  for(unsigned i = 0; i < 16; i++)
+   WB_until[i] = delta;
+
   write_finish_timestamp = delta;
   divide_finish_timestamp = delta;
 
@@ -182,6 +188,12 @@ void SH7095::AdjustTS(int32 delta, bool force_set)
 
   if(!(MM_until & 0x40000000))
    MM_until += delta;
+
+  for(unsigned i = 0; i < 16; i++)
+  {
+   if(!(WB_until[i] & 0x40000000))
+    WB_until[i] += delta;
+  }
 
   if(!(write_finish_timestamp & 0x40000000))
    write_finish_timestamp += delta;
@@ -205,6 +217,9 @@ void SH7095::TruePowerOn(void)
  for(unsigned i = 0; i < 16; i++)
   R[i] = 0;
 
+ for(unsigned i = 0; i < 16; i++)
+  WB_until[i] = 0;
+
  PC = 0;
 
  SR = 0;
@@ -218,6 +233,7 @@ void SH7095::TruePowerOn(void)
  EPending = 0;
  Pipe_ID = 0;
  Pipe_IF = 0;
+ IBuffer = 0;
 
  PC_IF = PC_ID = 0;
 
@@ -325,7 +341,7 @@ void SH7095::DMA_CheckEnterBurstHack(void)
 //
 INLINE void SH7095::DMA_DoTransfer(unsigned ch)
 {
- static const int8 ainc[3][4] = 
+ static const int8 ainc[3][4] =
  {
   { 0, 1, -1, -1 },
   { 0, 2, -2, -2 },
@@ -440,7 +456,7 @@ INLINE void SH7095::DMA_DoTransfer(unsigned ch)
 
 sscpu_timestamp_t SH7095::DMA_Update(sscpu_timestamp_t et)
 {
- if(MDFN_UNLIKELY(ExtHalt))
+ if(MDFN_UNLIKELY(ExtHaltDMA))
  {
   dma_lastts = et;
   return dma_lastts + 128;
@@ -516,12 +532,24 @@ void SH7095::DMA_StartSG(void)
 }
 
 // Must be called after DMACH[0].CHCR or DMACH[1].CHCR or DMAOR changes.
-INLINE void SH7095::DMA_RecalcRunning(void)
+NO_INLINE void SH7095::DMA_RecalcRunning(void)
 {
  DMA_PenaltyKludgeAmount = 0;
 
- if(DMA_RunCond(0) || DMA_RunCond(1))
-  DMA_PenaltyKludgeAmount = 18;
+ for(unsigned ch = 0; ch < 2; ch++)
+ {
+  if(DMA_RunCond(ch))
+  {
+   const int32 npka = (((DMACH[ch].CHCR >> 10) & 3) == 3 && (DMACH[ch].SAR & DMACH[ch].DAR & 0x06000000) != 0x06000000) ? 23 : 18;
+
+   DMA_PenaltyKludgeAmount = std::max<int32>(DMA_PenaltyKludgeAmount, npka);
+  }
+ }
+
+#if 1
+ if(MDFN_UNLIKELY(ss_horrible_hacks & HORRIBLEHACK_NOSH2DMAPENALTY))
+  DMA_PenaltyKludgeAmount = 0;
+#endif
 }
 
 INLINE void SH7095::DMA_BusTimingKludge(void)
@@ -643,7 +671,7 @@ void SH7095::FRT_WDT_Update(void)
  FRT.lastts = timestamp;
 
  //
- // 
+ //
  //
  const uint32 PreAddCD = FRT_WDT_ClockDivider;
  FRT_WDT_ClockDivider += clocks;
@@ -925,7 +953,7 @@ NO_INLINE void SH7095::OnChipRegWrite(uint32 A, uint32 V)
 
    //
    // Division Unit registers
-   // 
+   //
    case 0x20:
    case 0x00:
 	DVSR = V;
@@ -1155,6 +1183,7 @@ NO_INLINE void SH7095::OnChipRegWrite(uint32 A, uint32 V)
 	 //
 	 //const uint8 old_TCR = FRT.TCR;
  	 FRT.TCR = V;
+
 	 //
 	 //
 	 //
@@ -1333,7 +1362,7 @@ INLINE T SH7095::OnChipRegRead(uint32 A)
 
    //
    // Division Unit registers
-   // 
+   //
    case 0x20:
    case 0x22:
    case 0x00:
@@ -1794,47 +1823,48 @@ INLINE T SH7095::MemReadRT(uint32 A)
  else
   timestamp = std::max<sscpu_timestamp_t>(MA_until, timestamp);
 
-  //
-  // WARNING: Template arguments CacheEnabled and TwoWayMode are only valid for region==0.  In addition, TwoWayMode is only valid for CacheEnabled==true.
-  //
-  switch(region)	// A >> 29
-  {
-	  case 0:
-		  if(CacheEnabled)
-		  {
-			  const uint32 ATM = A & (0x7FFFF << 10);
-			  auto* cent = &Cache[(A >> 4) & 0x3F];
-			  int way_match = -1;
+ //
+ // WARNING: Template arguments CacheEnabled and TwoWayMode are only valid for region==0.  In addition, TwoWayMode is only valid for CacheEnabled==true.
+ //
+ switch(region)	// A >> 29
+ {
+  case 0:
+	if(CacheEnabled)
+	{
+	 const uint32 ATM = A & (0x7FFFF << 10);
+	 auto* cent = &Cache[(A >> 4) & 0x3F];
+	 int way_match = -1;
 
-			  way_match = cmov_eq_thing(ATM, cent->Tag[0], way_match, 0);
-			  way_match = cmov_eq_thing(ATM, cent->Tag[1], way_match, 1);
-			  way_match = cmov_eq_thing(ATM, cent->Tag[2], way_match, 2);
-			  way_match = cmov_eq_thing(ATM, cent->Tag[3], way_match, 3);
+	 way_match = cmov_eq_thing(ATM, cent->Tag[0], way_match, 0);
+	 way_match = cmov_eq_thing(ATM, cent->Tag[1], way_match, 1);
+	 way_match = cmov_eq_thing(ATM, cent->Tag[2], way_match, 2);
+	 way_match = cmov_eq_thing(ATM, cent->Tag[3], way_match, 3);
 
-			  if(MDFN_UNLIKELY(way_match < 0)) // Cache miss!
-			  {
-				  if(IsInstr)
-				  {
-					  if(MDFN_UNLIKELY(CCR & CCR_ID))
-						  goto EBRCase;
-				  }
-				  else
-				  {
-					  if(MDFN_UNLIKELY(CCR & CCR_OD))
-						  goto EBRCase;
-				  }
+	 if(MDFN_UNLIKELY(way_match < 0)) // Cache miss!
+	 {
+	  if(IsInstr)
+	  {
+	   if(MDFN_UNLIKELY(CCR & CCR_ID))
+	    goto EBRCase;
+	  }
+	  else
+	  {
+	   if(MDFN_UNLIKELY(CCR & CCR_OD))
+	    goto EBRCase;
+	  }
 
-				  if(TwoWayMode)
-					  way_match = 3 ^ (cent->LRU & 0x1);
-				  else
-					  way_match = LRU_Replace_Tab[cent->LRU];
+	  if(TwoWayMode)
+	   way_match = 3 ^ (cent->LRU & 0x1);
+	  else
+	   way_match = LRU_Replace_Tab[cent->LRU];
 
-				  if(MDFN_UNLIKELY(way_match < 0))
-					  goto EBRCase;
+	  if(MDFN_UNLIKELY(way_match < 0))
+	   goto EBRCase;
 
-				  //
-				  // Load cache line.
-				  //
+	  //
+	  // Load cache line.
+	  //
+	  //printf("Cache load line: %08x\n", A);
 	  cent->Tag[way_match] = ATM;
 
 	  {
@@ -2230,7 +2260,7 @@ void SH7095::ForceInternalEventUpdates(void)
 }
 
 //
-// Default priority(for same ipr value), highest to lowest: 
+// Default priority(for same ipr value), highest to lowest:
 //  NMI
 //  User break
 //  IRL15
@@ -2517,6 +2547,7 @@ uint32 NO_INLINE SH7095::Exception(const unsigned exnum, const unsigned vecnum)
  uint32 new_PC;
 
  timestamp += 2;
+ timestamp = std::max<sscpu_timestamp_t>(MA_until, timestamp);
 
  if(exnum == EXCEPTION_RESET || exnum == EXCEPTION_POWERON)
  {
@@ -2589,7 +2620,7 @@ INLINE void SH7095::Step(void)
  #define PART_OP_NORMIDIF DoIDIF<which, EmulateICache, DebugMode, false, false, false>();
 
  #define BEGIN_OP(x) 	     OP_##x { PART_OP_NORMIDIF
- #define BEGIN_OP_DLYIDIF(x) OP_##x { 
+ #define BEGIN_OP_DLYIDIF(x) OP_##x {
 
  // "Interrupt-disabled" instruction(blocks interrupt from being taken for next instruction).
  // Use with BEGIN_OP_DLYIDIF()
@@ -2597,8 +2628,8 @@ INLINE void SH7095::Step(void)
 
  #define END_OP } break;
 
- #define WB_EX_CHECK(r) { }
- #define WB_WRITE(r, v) { R[(r)] = (v); }
+ #define WB_EX_CHECK(r) { if(EmulateICache) { if(timestamp < WB_until[(r)]) timestamp = WB_until[(r)]; } }
+ #define WB_WRITE(r, v) { R[(r)] = (v); if(EmulateICache) { WB_until[(r)] = MA_until + 1; } }
  //
  //
  //
@@ -3340,7 +3371,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // DIV0U 
+ // DIV0U
  //
  BEGIN_OP(DIV0U)
 	SetQ(false);
@@ -3350,7 +3381,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // DT 
+ // DT
  //
  BEGIN_OP(DT)
 	const unsigned n = instr_nyb2;
@@ -4030,7 +4061,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // BF 
+ // BF
  //
  BEGIN_OP(BF)
 	CondRelBranch<which, EmulateICache, DebugMode, false>(!GetT(), (uint32)(int8)instr << 1);
@@ -4038,7 +4069,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // BF/S 
+ // BF/S
  //
  BEGIN_OP(BF_S)
 	CondRelBranch<which, EmulateICache, DebugMode, true>(!GetT(), (uint32)(int8)instr << 1);
@@ -4046,7 +4077,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // BT 
+ // BT
  //
  BEGIN_OP(BT)
 	CondRelBranch<which, EmulateICache, DebugMode, false>(GetT(), (uint32)(int8)instr << 1);
@@ -4054,7 +4085,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // BT/S 
+ // BT/S
  //
  BEGIN_OP(BT_S)
 	CondRelBranch<which, EmulateICache, DebugMode, true>(GetT(), (uint32)(int8)instr << 1);
@@ -4062,7 +4093,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // BRA 
+ // BRA
  //
  BEGIN_OP_DLYIDIF(BRA)
 	UCRelDelayBranch<which, EmulateICache, DebugMode>((uint32)sign_x_to_s32(12, instr) << 1);
@@ -4080,7 +4111,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // BSR 
+ // BSR
  //
  BEGIN_OP_DLYIDIF(BSR)
 	PR = PC;
@@ -4124,7 +4155,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // RTS 
+ // RTS
  //
  BEGIN_OP_DLYIDIF(RTS)
 	UCDelayBranch<which, EmulateICache, DebugMode>(PR);
@@ -4132,7 +4163,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // CLRT 
+ // CLRT
  //
  BEGIN_OP(CLRT)
 	SetT(false);
@@ -4140,7 +4171,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // CLRMAC 
+ // CLRMAC
  //
  BEGIN_OP(CLRMAC)
 	MACH = 0;
@@ -4149,7 +4180,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // LDC 
+ // LDC
  //
  BEGIN_OP_DLYIDIF(LDC)
 	const unsigned m = instr_nyb2;
@@ -4165,7 +4196,7 @@ INLINE void SH7095::Step(void)
  END_OP
 
  //
- // LDC.L 
+ // LDC.L
  //
  // Pipeline: page 233
  //
@@ -4191,7 +4222,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // LDS 
+ // LDS
  //
  BEGIN_OP_DLYIDIF(LDS)
 	const unsigned m = instr_nyb2;
@@ -4203,7 +4234,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // LDS.L 
+ // LDS.L
  //
  BEGIN_OP_DLYIDIF(LDS_L)	// Pipeline same as ordinary load instruction
 	const unsigned m = instr_nyb2;
@@ -4220,14 +4251,14 @@ INLINE void SH7095::Step(void)
 
 
  //
- // NOP 
+ // NOP
  //
  BEGIN_OP(NOP)
  END_OP
 
 
  //
- // RTE 
+ // RTE
  //
  // Pipeline: page 241
  //
@@ -4248,7 +4279,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // SETT 
+ // SETT
  //
  BEGIN_OP(SETT)
 	SetT(true);
@@ -4256,7 +4287,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // SLEEP 
+ // SLEEP
  //
  BEGIN_OP_DLYIDIF(SLEEP)
 	//
@@ -4310,7 +4341,7 @@ INLINE void SH7095::Step(void)
 	 timestamp += 7;
 	 return;
 	}
-	else 
+	else
 	{
 
 	 FRT_Reset();	// Reset again(for the counter) because we didn't stop clocking it.
@@ -4320,7 +4351,7 @@ INLINE void SH7095::Step(void)
  END_OP
 
  //
- // STC 
+ // STC
  //
  BEGIN_OP_DLYIDIF(STC)
 	const unsigned n = instr_nyb2;
@@ -4332,7 +4363,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // STC.L 
+ // STC.L
  //
  // pipeline: page 234
  BEGIN_OP_DLYIDIF(STC_L)
@@ -4350,7 +4381,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // STS 
+ // STS
  //
  BEGIN_OP_DLYIDIF(STS)
 	const unsigned n = instr_nyb2;
@@ -4362,7 +4393,7 @@ INLINE void SH7095::Step(void)
 
 
  //
- // STS.L 
+ // STS.L
  //
  BEGIN_OP_DLYIDIF(STS_L)	// Pipeline same as ordinary store instruction
 	const unsigned n = instr_nyb2;
@@ -4510,7 +4541,7 @@ INLINE void SH7095::Step(void)
 	 }
 	 else
 	 {
-	  // 
+	  //
 	  // Can happen like so(note for future testing):
 	  //
 	  // (WDT interval timer IRQ pending here)
@@ -4584,6 +4615,7 @@ void SH7095::StateAction(StateMem* sm, const unsigned load, const bool data_only
   SFVAR(MA_until),
   SFVAR(MM_until),
   SFVAR(write_finish_timestamp),
+  SFVAR(WB_until),
   SFVAR(SysRegs),
 
   SFVAR(EPending),
@@ -4690,6 +4722,7 @@ void SH7095::StateAction(StateMem* sm, const unsigned load, const bool data_only
   SFVAR(SCI.TSR),
 
   SFVAR(ExtHalt),
+  SFVAR(ExtHaltDMA),
 
   SFVAR(PC_IF),
   SFVAR(PC_ID),
@@ -4697,12 +4730,38 @@ void SH7095::StateAction(StateMem* sm, const unsigned load, const bool data_only
   SFEND
  };
 
- MDFNSS_StateAction(sm, load, data_only, StateRegs, sname, false);
+ MDFNSS_StateAction(sm, load, data_only, StateRegs, sname);
 
  if(load)
  {
   SetCCR(CCR);
+
+  if(load < 0x00102300)
+  {
+   ExtHaltDMA = ExtHalt;
+  }
  }
+}
+
+//
+// Called after loading a state where instruction cache emulation was not previously enabled in the emulator, but is enabled now(e.g. via database).
+//
+// May not cover all cases, needs more testing.
+//
+void SH7095::FixupICacheModeState(void)
+{
+ for(unsigned i = 0; i < 16; i++)
+  WB_until[i] = 0;
+ //
+ //const uint32 old_IBuffer = IBuffer;
+ const uint32 A = (PC - 2) & ~3;
+
+ if((int32)A < 0)
+  IBuffer = MDFN_densb<uint32, true>(&Cache[(A >> 4) & 0x3F].Data[(A >> 10) & 0x3][NE32ASU8_IDX_ADJ(uint32, A & 0x0F)]);
+ else
+  IBuffer = ne16_rbo_be<uint32>(SH7095_FastMap[A >> SH7095_EXT_MAP_GRAN_BITS], A);
+
+ //printf("[%s] PC=0x%08x, IBuffer=0x%08x old_IBuffer=0x%08x --- 0x%08x\n", cpu_name, PC, IBuffer, old_IBuffer, ne16_rbo_be<uint32>(SH7095_FastMap[A >> SH7095_EXT_MAP_GRAN_BITS], A));
 }
 
 //
@@ -4714,7 +4773,7 @@ void SH7095::StateAction(StateMem* sm, const unsigned load, const bool data_only
 //
 //
 
-INLINE uint32 SH7095::GetRegister(const unsigned id)
+INLINE uint32 SH7095::GetRegister(const unsigned id, char* const special, const uint32 special_len)
 {
  uint32 ret = 0xDEADBEEF;
 
@@ -5018,13 +5077,13 @@ void SH7095::SetRegister(const unsigned id, const uint32 value)
   //
   //
   //
-  case GSREG_FTCSR:	
+  case GSREG_FTCSR:
 	FRT.FTCSR = value & 0x8F;
 	RecalcPendingIntPEX();
 	FRT_CheckOCR();
 	break;
 
-  case GSREG_FTCSRM:	
+  case GSREG_FTCSRM:
 	FRT.FTCSRM = value & 0x8F;
 	break;
  }
@@ -5056,7 +5115,7 @@ INLINE void SH7095::CheckRWBreakpoints(void (*MRead)(unsigned len, uint32 addr),
  switch(lpid >> 24)
  {
  #include "sh7095_opdefs.inc"
- #define BEGIN_BP_OP(x) OP_##x { 
+ #define BEGIN_BP_OP(x) OP_##x {
  #define END_BP_OP } break;
 
  //
@@ -5496,7 +5555,7 @@ INLINE void SH7095::CheckRWBreakpoints(void (*MRead)(unsigned len, uint32 addr),
 
 
  //
- // LDC.L 
+ // LDC.L
  //
  BEGIN_BP_OP(LDC_L)
 	const unsigned m = instr_nyb2;
@@ -5507,7 +5566,7 @@ INLINE void SH7095::CheckRWBreakpoints(void (*MRead)(unsigned len, uint32 addr),
 
 
  //
- // LDS.L 
+ // LDS.L
  //
  BEGIN_BP_OP(LDS_L)
 	const unsigned m = instr_nyb2;
@@ -5518,7 +5577,7 @@ INLINE void SH7095::CheckRWBreakpoints(void (*MRead)(unsigned len, uint32 addr),
 
 
  //
- // RTE 
+ // RTE
  //
  BEGIN_BP_OP(RTE)
 	MRead(4, R[15]);
@@ -5526,7 +5585,7 @@ INLINE void SH7095::CheckRWBreakpoints(void (*MRead)(unsigned len, uint32 addr),
  END_BP_OP
 
  //
- // STC.L 
+ // STC.L
  //
  BEGIN_BP_OP(STC_L)
 	const unsigned n = instr_nyb2;
@@ -5536,7 +5595,7 @@ INLINE void SH7095::CheckRWBreakpoints(void (*MRead)(unsigned len, uint32 addr),
  END_BP_OP
 
  //
- // STS.L 
+ // STS.L
  //
  BEGIN_BP_OP(STS_L)	// Pipeline same as ordinary store instruction
 	const unsigned n = instr_nyb2;
