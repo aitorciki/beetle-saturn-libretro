@@ -882,7 +882,7 @@ static void Emulate(EmulateSpecStruct* espec_arg)
  RebaseTS(end_ts);
 
  CDB_ResetTS();
- SOUND_ResetTS();
+ SOUND_AdjustTS(-end_ts);
  VDP1::AdjustTS(-end_ts);
  VDP2::AdjustTS(-end_ts);
  SMPC_ResetTS();

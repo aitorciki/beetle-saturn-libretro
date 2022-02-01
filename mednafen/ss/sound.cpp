@@ -2,7 +2,7 @@
 /* Mednafen Sega Saturn Emulation Module                                      */
 /******************************************************************************/
 /* sound.cpp - Sound Emulation
-**  Copyright (C) 2015-2016 Mednafen Team
+**  Copyright (C) 2015-2021 Mednafen Team
 **
 ** This program is free software; you can redistribute it and/or
 ** modify it under the terms of the GNU General Public License
@@ -24,7 +24,8 @@
 // registers whose values may change between the individual byte reads.
 // (May not be worth emulating if it could possibly trigger problems in games)
 
-#include "../hw_cpu/m68k/m68k.h"
+#include <mednafen/hw_cpu/m68k/m68k.h>
+#include <mednafen/jump.h>
 
 #include "ss.h"
 #include "sound.h"
@@ -41,20 +42,67 @@ static int32 next_scsp_time;
 static uint32 clock_ratio;
 static sscpu_timestamp_t lastts;
 
+static MDFN_jmp_buf jbuf;
+
 int16_t IBuffer[1024][2];
 static uint32 IBufferCount;
 
-static INLINE void SCSP_SoundIntChanged(unsigned level)
+static INLINE void SCSP_SoundIntChanged(SS_SCSP* s, unsigned level)
 {
  SoundCPU.SetIPL(level);
 }
 
-static INLINE void SCSP_MainIntChanged(bool state)
+static INLINE void SCSP_MainIntChanged(SS_SCSP* s, bool state)
 {
  SCU_SetInt(SCU_INT_SCSP, state);
 }
 
 #include "scsp.inc"
+
+//
+//
+template<typename T>
+static MDFN_FASTCALL T SoundCPU_BusRead(uint32 A);
+
+static MDFN_FASTCALL uint16 SoundCPU_BusReadInstr(uint32 A);
+
+template<typename T>
+static MDFN_FASTCALL void SoundCPU_BusWrite(uint32 A, T V);
+
+static MDFN_FASTCALL void SoundCPU_BusRMW(uint32 A, uint8 (MDFN_FASTCALL *cb)(M68K*, uint8));
+static MDFN_FASTCALL unsigned SoundCPU_BusIntAck(uint8 level);
+static MDFN_FASTCALL void SoundCPU_BusRESET(bool state);
+//
+//
+
+void SOUND_Init(void)
+{
+ memset(IBuffer, 0, sizeof(IBuffer));
+ IBufferCount = 0;
+
+ run_until_time = 0;
+ next_scsp_time = 0;
+ lastts = 0;
+
+ SoundCPU.BusRead8 = SoundCPU_BusRead<uint8>;
+ SoundCPU.BusRead16 = SoundCPU_BusRead<uint16>;
+
+ SoundCPU.BusWrite8 = SoundCPU_BusWrite<uint8>;
+ SoundCPU.BusWrite16 = SoundCPU_BusWrite<uint16>;
+
+ SoundCPU.BusReadInstr = SoundCPU_BusReadInstr;
+
+ SoundCPU.BusRMW = SoundCPU_BusRMW;
+
+ SoundCPU.BusIntAck = SoundCPU_BusIntAck;
+ SoundCPU.BusRESET = SoundCPU_BusRESET;
+
+ SoundCPU.DBG_Warning = SS_DBG_Wrap<SS_DBG_WARNING | SS_DBG_M68K>;
+ SoundCPU.DBG_Verbose = SS_DBG_Wrap<SS_DBG_M68K>;
+
+ SS_SetPhysMemMap(0x05A00000, 0x05A7FFFF, SCSP.GetRAMPtr(), 0x80000, true);
+ // TODO: MEM4B: SS_SetPhysMemMap(0x05A00000, 0x05AFFFFF, SCSP.GetRAMPtr(), 0x40000, true);
+}
 
 uint8 SOUND_PeekRAM(uint32 A)
 {
@@ -66,13 +114,19 @@ void SOUND_PokeRAM(uint32 A, uint8 V)
  ne16_wbo_be<uint8>(SCSP.GetRAMPtr(), A & 0x7FFFF, V);
 }
 
-void SOUND_ResetTS(void)
+static INLINE void ResetTS_68K(void)
 {
  next_scsp_time -= SoundCPU.timestamp;
  run_until_time -= (int64)SoundCPU.timestamp << 32;
  SoundCPU.timestamp = 0;
+}
 
- lastts = 0;
+void SOUND_AdjustTS(const int32 delta)
+{
+ ResetTS_68K();
+ //
+ //
+ lastts += delta;
 }
 
 void SOUND_Reset(bool powering_up)
@@ -196,44 +250,51 @@ void SOUND_StateAction(StateMem* sm, const unsigned load, const bool data_only)
  SCSP.StateAction(sm, load, data_only, "SCSP");
 }
 
-static MDFN_FASTCALL uint8 SoundCPU_BusRead_uint8(uint32 A)
+//
+//
+//
+template<typename T>
+static MDFN_FASTCALL T SoundCPU_BusRead(uint32 A)
 {
- uint8 ret;
+ if(MDFN_UNLIKELY(A & (0xE00000 | (sizeof(T) - 1))))
+ {
+  SoundCPU.timestamp += 4;
+
+  if(A & (sizeof(T) - 1))
+   SoundCPU.SignalAddressError(A, 0x3);
+  else
+   SoundCPU.SignalDTACKHalted(A);
+
+  MDFN_longjmp(jbuf);
+ }
+ //
+ T ret;
 
  SoundCPU.timestamp += 4;
 
  if(MDFN_UNLIKELY(SoundCPU.timestamp >= next_scsp_time))
   RunSCSP();
 
- SCSP.RW<uint8, false>(A & 0x1FFFFF, ret);
+ SCSP.RW<T, false>(A & 0x1FFFFF, ret);
 
  SoundCPU.timestamp += 2;
 
  return ret;
 }
 
-static MDFN_FASTCALL uint16 SoundCPU_BusRead_uint16(uint32 A)
-{
- uint16 ret;
-
- SoundCPU.timestamp += 4;
-
- if(MDFN_UNLIKELY(SoundCPU.timestamp >= next_scsp_time))
-  RunSCSP();
-
- SCSP.RW<uint16, false>(A & 0x1FFFFF, ret);
-
- SoundCPU.timestamp += 2;
-
- return ret;
-}
-
-//
-//
-// TODO: test masks.
-//
 static MDFN_FASTCALL uint16 SoundCPU_BusReadInstr(uint32 A)
 {
+ if(MDFN_UNLIKELY(A & 0xE00001))
+ {
+  SoundCPU.timestamp += 4;
+
+  if(A & 1)
+   SoundCPU.SignalAddressError(A, 0x2);
+  else
+   SoundCPU.SignalDTACKHalted(A);
+
+  MDFN_longjmp(jbuf);
+ }
  uint16 ret;
 
  SoundCPU.timestamp += 4;
@@ -248,28 +309,41 @@ static MDFN_FASTCALL uint16 SoundCPU_BusReadInstr(uint32 A)
  return ret;
 }
 
-static MDFN_FASTCALL void SoundCPU_BusWrite_uint16(uint32 A, uint16 V)
+template<typename T>
+static MDFN_FASTCALL void SoundCPU_BusWrite(uint32 A, T V)
 {
+ if(MDFN_UNLIKELY(A & (0xE00000 | (sizeof(T) - 1))))
+ {
+  SoundCPU.timestamp += 4;
+
+  if(A & (sizeof(T) - 1))
+   SoundCPU.SignalAddressError(A, 0x1);
+  else
+   SoundCPU.SignalDTACKHalted(A);
+
+  MDFN_longjmp(jbuf);
+ }
+ //
+ SoundCPU.timestamp += 2;
+
  if(MDFN_UNLIKELY(SoundCPU.timestamp >= next_scsp_time))
   RunSCSP();
 
  SoundCPU.timestamp += 2;
- SCSP.RW<uint16, true>(A & 0x1FFFFF, V);
- SoundCPU.timestamp += 2;
-}
 
-static MDFN_FASTCALL void SoundCPU_BusWrite_uint8(uint32 A, uint8 V)
-{
- if(MDFN_UNLIKELY(SoundCPU.timestamp >= next_scsp_time))
-  RunSCSP();
-
- SoundCPU.timestamp += 2;
- SCSP.RW<uint8, true>(A & 0x1FFFFF, V);
+ SCSP.RW<T, true>(A & 0x1FFFFF, V);
  SoundCPU.timestamp += 2;
 }
 
 static MDFN_FASTCALL void SoundCPU_BusRMW(uint32 A, uint8 (MDFN_FASTCALL *cb)(M68K*, uint8))
 {
+ if(MDFN_UNLIKELY(A & 0xE00000))
+ {
+  SoundCPU.timestamp += 4;
+  SoundCPU.SignalDTACKHalted(A);
+  MDFN_longjmp(jbuf);
+ }
+ //
  uint8 tmp;
 
  SoundCPU.timestamp += 4;
@@ -312,31 +386,12 @@ void SOUND_SetSCSPRegister(const unsigned id, const uint32 value)
  SCSP.SetRegister(id, value);
 }
 
-void SOUND_Init(void)
+uint32 SOUND_GetM68KRegister(const unsigned id, char* const special, const uint32 special_len)
 {
- memset(IBuffer, 0, sizeof(IBuffer));
- IBufferCount = 0;
+ return SoundCPU.GetRegister(id, special, special_len);
+}
 
- run_until_time = 0;
- next_scsp_time = 0;
- lastts = 0;
-
- SoundCPU.BusRead8 = SoundCPU_BusRead_uint8;
- SoundCPU.BusRead16 = SoundCPU_BusRead_uint16;
-
- SoundCPU.BusWrite8 = SoundCPU_BusWrite_uint8;
- SoundCPU.BusWrite16 = SoundCPU_BusWrite_uint16;
-
- SoundCPU.BusReadInstr = SoundCPU_BusReadInstr;
-
- SoundCPU.BusRMW = SoundCPU_BusRMW;
-
- SoundCPU.BusIntAck = SoundCPU_BusIntAck;
- SoundCPU.BusRESET = SoundCPU_BusRESET;
-
- SoundCPU.DBG_Warning = SS_DBG_Wrap<SS_DBG_WARNING | SS_DBG_M68K>;
- SoundCPU.DBG_Verbose = SS_DBG_Wrap<SS_DBG_M68K>;
-
- SS_SetPhysMemMap(0x05A00000, 0x05A7FFFF, SCSP.GetRAMPtr(), 0x80000, true);
- // TODO: MEM4B: SS_SetPhysMemMap(0x05A00000, 0x05AFFFFF, SCSP.GetRAMPtr(), 0x40000, true);
+void SOUND_SetM68KRegister(const unsigned id, const uint32 value)
+{
+ SoundCPU.SetRegister(id, value);
 }

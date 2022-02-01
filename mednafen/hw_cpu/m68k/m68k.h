@@ -22,10 +22,10 @@
 #ifndef __MDFN_M68K_H
 #define __MDFN_M68K_H
 
-#include <boolean.h>
+#include <mednafen/mednafen-types.h>
+#include <mednafen/state.h>
 
-#include "../../mednafen-types.h"
-#include "../../state.h"
+#include <boolean.h>
 
 class M68K
 {
@@ -41,6 +41,29 @@ class M68K
 
  void SetIPL(uint8 ipl_new);
  void SetExtHalted(bool state);
+
+
+ //
+ // SignalDTACKHalted() and SignalAddressError() should be called from the external
+ // bus read/write handlers as appropriate, followed by a longjmp() to above
+ // Run()/Step().
+ //
+ INLINE void SignalDTACKHalted(uint32 addr)
+ {
+  XPending |= XPENDING_MASK_DTACKHALTED;
+  DBG_Warning("[M68K] Halting due to DTACK absence: address=0x%08x\n", addr);
+ }
+
+ INLINE void SignalAddressError(uint32 addr, uint8 type)
+ {
+  if(XPending & (XPENDING_MASK_ADDRESS | XPENDING_MASK_BUS | XPENDING_MASK_RESET))
+  {
+   XPending |= XPENDING_MASK_ERRORHALTED;
+   DBG_Warning("[M68K] Halting due to address error/bus error during address eror/bus error/reset exception handling: address=0x%08x type=0x%01x\n", addr, type);
+  }
+
+  XPending |= XPENDING_MASK_ADDRESS;
+ }
 
  void StateAction(StateMem* sm, const unsigned load, const bool data_only, const char* sname);
 
@@ -79,11 +102,17 @@ class M68K
   XPENDING_MASK_INT 	= 0x0001,
   XPENDING_MASK_NMI	= 0x0002,
   XPENDING_MASK_RESET	= 0x0010,
+  XPENDING_MASK_ADDRESS = 0x0020,
+  XPENDING_MASK_BUS	= 0x0040,
   XPENDING_MASK_STOPPED	= 0x0100,	// via STOP instruction
-  XPENDING_MASK_EXTHALTED= 0x1000,
+
+  XPENDING_MASK_ERRORHALTED = 0x0400,	// address/bus error during address/bus error handling.
+
+  XPENDING_MASK_DTACKHALTED = 0x0800,
+  XPENDING_MASK_EXTHALTED   = 0x1000,
 
   // For save state sanitizing:
-  XPENDING_MASK__VALID = XPENDING_MASK_INT | XPENDING_MASK_NMI | XPENDING_MASK_RESET | XPENDING_MASK_STOPPED | XPENDING_MASK_EXTHALTED
+  XPENDING_MASK__VALID = XPENDING_MASK_INT | XPENDING_MASK_NMI | XPENDING_MASK_RESET | XPENDING_MASK_ADDRESS | XPENDING_MASK_BUS | XPENDING_MASK_STOPPED | XPENDING_MASK_ERRORHALTED | XPENDING_MASK_DTACKHALTED | XPENDING_MASK_EXTHALTED
  };
 
  const bool Revision_E;
