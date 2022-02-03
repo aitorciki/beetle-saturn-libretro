@@ -1,4 +1,4 @@
 #include "../ss.h"
 #include "../cart.h"
-#include "../../FileStream.h"
-#include "../mednafen-endian.h"
+#include <mednafen/FileStream.h>
+#include <mednafen/mednafen-endian.h>

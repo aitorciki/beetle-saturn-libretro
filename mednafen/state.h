@@ -55,12 +55,38 @@ int MDFNSS_LoadSM(void *st, uint32_t ver);
 
 struct SFORMAT
 {
+	//
+	// Form of data.  It's optional to specify a form other than GENERIC,
+	// but it'll help save state loading fuzz testing to be more useful.
+	//
+	enum class FORM : uint8
+	{
+	 GENERIC = 0,
+
+	 // Data is used in a simple check to ensure that the save state was
+	 // created with the same emulated hardware configuration or firmware
+	 // configuration as is currently being emulated, and if it was not,
+	 // state loading errors out.
+	 CONFIG_VALIDATE,
+
+	 // Data represents nonvolatile memory that is saved before exiting,
+	 // loaded before emulation begins, and preserved across emulated
+	 // resets and power toggles.
+	 NVMEM,
+
+	 // Mostly the same as NVMEM, but it may also be optionally, or not,
+	 // partially, or fully, initialized on game load with e.g. the current
+	 // time or based on Mednafen settings.
+	 NVMEM_INIT,
+	};
+
 	const char* name;	// Name;
 	void* data;		// Pointer to the variable/array
 	uint32 size;		// Length, in bytes, of the data to be saved EXCEPT:
 				//  In the case of 'bool' it is the number of bool elements to save(bool is not always 1-byte).
 				// If 0, the subchunk isn't saved.
 	uint32 type;		// Type/element size; 0(bool), 1, 2, 4, 8
+    FORM form;
 	uint32 repcount;
 	uint32 repstride;
 };
@@ -94,7 +120,7 @@ static INLINE void SF_FORCE_ANY(typename std::enable_if<std::is_enum<T>::value>:
 }
 
 template<typename IT>
-static INLINE SFORMAT SFBASE_(IT* const iv, uint32 icount, const uint32 totalcount, const size_t repstride, void* repbase, const char* const name)
+static INLINE SFORMAT SFBASE_(IT* const iv, uint32 icount, const uint32 totalcount, const size_t repstride, void* repbase, const SFORMAT::FORM form, const char* const name)
 {
  typedef typename std::remove_all_extents<IT>::type T;
  uint32 count = icount * (sizeof(IT) / sizeof(T));
@@ -117,6 +143,7 @@ static INLINE SFORMAT SFBASE_(IT* const iv, uint32 icount, const uint32 totalcou
   ret.size = sizeof(T) * count;
   ret.type = sizeof(T);
  }
+ ret.form = form;
 
  return ret;
 }
@@ -132,9 +159,21 @@ static INLINE SFORMAT SFBASE_(std::array<IT, N>* iv, uint32 icount, const uint32
 */
 
 template<typename T>
+static INLINE SFORMAT SFBASE_(T* const v, const uint32 count, const SFORMAT::FORM form, const char* const name)
+{
+ return SFBASE_(v, count, 1, 0, v, form, name);
+}
+
+template<typename IT>
+static INLINE SFORMAT SFBASE_(IT* const iv, uint32 icount, const uint32 totalcount, const size_t repstride, void* repbase, const char* const name)
+{
+ return SFBASE_(iv, icount, totalcount, repstride, repbase, SFORMAT::FORM::GENERIC, name);
+}
+
+template<typename T>
 static INLINE SFORMAT SFBASE_(T* const v, const uint32 count, const char* const name)
 {
- return SFBASE_(v, count, 1, 0, v, name);
+ return SFBASE_(v, count, 1, 0, v, SFORMAT::FORM::GENERIC, name);
 }
 
 #define SFVARN(x, ...)	SFBASE_(&(x), 1, __VA_ARGS__)
@@ -169,9 +208,9 @@ static INLINE SFORMAT SFBASE_(T* const v, const uint32 count, const char* const 
 #define SFPTRDN(x, ...)		SFBASE_<double>((x), __VA_ARGS__)
 #define SFPTRD(x, ...)		SFBASE_<double>((x), __VA_ARGS__, #x)
 
-#define SFLINK(x) { nullptr, (x), ~0U, 0, 0, 0 }
+#define SFLINK(x) { nullptr, (x), ~0U, 0, SFORMAT::FORM::GENERIC, 0, 0 }
 
-#define SFEND { nullptr, nullptr, 0, 0, 0, 0 }
+#define SFEND { nullptr, nullptr, 0, 0, SFORMAT::FORM::GENERIC, 0, 0 }
 
 #include <vector>
 
